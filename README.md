@@ -100,28 +100,38 @@ Hardware detection and model compatibility will help determine which components 
 
 ```text
 Warden/
-├── core/
-├── qiskit/
-├── gemma/
-├── corpus/
-├── auvi/
-├── concrete/
-├── apye/
-├── infrastructure/
-│   ├── deloader/
-│   ├── model-installer/
-│   ├── model-manager/
-│   ├── corpus-manager/
-│   ├── api-manager/
-│   └── secret-manager/
-├── registry/
-├── config/
+├── warden.cpp          # Independent bootstrap and system manager
+├── code/               # Replaceable application source
+│   ├── core/
+│   ├── qiskit/
+│   ├── gemma/
+│   ├── auvi/
+│   ├── concrete/
+│   └── infrastructure/
 ├── docs/
 ├── README.md
 └── LICENSE
 ```
 
-The repository contains source code, configuration templates, registries, and documentation. Large model files and offline databases will be distributed separately.
+The bootstrap is kept outside `code/` so application updates can replace the
+application source without replacing the system manager. The intended Linux
+layout keeps the persistent Git checkout and deployed application under
+`/opt/warden/`, installs the `warden` command in `/usr/local/bin/`, and stores
+system configuration and user data separately:
+
+```text
+/opt/warden/                 # Persistent source checkout and installed code
+/opt/warden/code/            # Deployed application code
+/usr/local/bin/warden        # Bootstrap/system manager executable
+/etc/warden/                 # Protected system configuration
+/var/lib/warden/             # Models, corpus, user data, and logs
+/etc/systemd/system/warden.service
+```
+
+Updates should stage repository changes, deploy only `code/`, build affected
+components, and verify service health. The Git metadata must remain available
+for future updates. Large model files and offline databases are distributed
+separately from application source.
 
 ## Development
 
