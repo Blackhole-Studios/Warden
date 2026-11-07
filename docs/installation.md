@@ -20,7 +20,8 @@ The installed system is intended to use:
 ├── source/                 # Persistent Git checkout and update metadata
 └── code/                   # Deployed application code
 
-/usr/local/bin/warden       # Installed bootstrap executable
+/usr/local/bin/warden       # Installed system manager
+/usr/local/bin/warden-bootstrap # Independent self-updater
 /etc/warden/
 ├── controls.json           # Protected system controls
 └── config.json
@@ -41,8 +42,10 @@ deploy by copying a temporary clone and discarding its `.git` directory.
 The installed command is intended to provide:
 
 ```text
+warden init
+warden start
 warden install
-warden update
+warden update [--self]
 warden uninstall
 warden status
 warden version
@@ -74,13 +77,23 @@ Deployment should avoid modifying protected configuration and user data.
 ## Implementation status
 
 `warden.cpp` provides the documented CLI, persistent checkout, staged code
-deployment, executable installation, status reporting, and normal or complete
-uninstall. Complete removal requires the exact confirmation phrase
-`REMOVE WARDEN DATA`.
+deployment, status reporting, uninstall, Core build, and Core supervision.
+`warden init` creates required directories, compiles
+`code/core/main.cpp` to `/opt/warden/bin/core`, and builds the separate
+`warden-bootstrap` executable from `warden-bootstrap.cpp`.
+`warden start` replaces itself with the bootstrap checker before starting Core.
+The checker pulls the checkout and compares the installed source revision with
+`warden.cpp` at the checkout revision. If Warden is unchanged or the checkout
+is older, it relaunches the current executable. If `warden.cpp` is newer, it
+compiles and installs the new executable, runs `warden init`, then relaunches
+it. `warden update --self` starts this bootstrap flow and exits cleanly so the
+bootstrap can wait for the old process to close. Run `warden update --self`
+with root privileges because the bootstrap replaces `/usr/local/bin/warden`.
 
-There is no build command configured, so updates deploy code without compiling
-it. A service restart is attempted only when a service unit is installed.
-Neither a unit nor a runnable Core entry point exists yet, so installation
-reports that no service was installed and updates report that restart was
-skipped. Configuration files are not generated until their schemas are
-defined.
+Core uses exit code `10` to request an update, `11` to request a restart, and
+`12` to request a safe exit. The current minimal Core waits for SIGINT or
+SIGTERM and returns `12`. Updates rebuild Core after deploying application
+code. The bootstrap removes `/usr/local/bin/warden.old` at the beginning of
+its next run. A systemd unit is still not present, so installation does not
+register a boot service. Configuration files are not generated until their
+schemas are defined.

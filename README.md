@@ -101,8 +101,9 @@ Hardware detection and model compatibility will help determine which components 
 ```text
 Warden/
 ├── warden.cpp          # Independent bootstrap and system manager
+├── warden-bootstrap.cpp # Replaces Warden after its process exits
 ├── code/               # Replaceable application source
-│   ├── core/
+│   ├── core/            # Core runtime and supervisor stop-code protocol
 │   ├── qiskit/
 │   ├── gemma/
 │   ├── auvi/
@@ -123,6 +124,7 @@ system configuration and user data separately:
 /opt/warden/                 # Persistent source checkout and installed code
 /opt/warden/code/            # Deployed application code
 /usr/local/bin/warden        # Bootstrap/system manager executable
+/usr/local/bin/warden-bootstrap # Independent Warden self-updater
 /etc/warden/                 # Protected system configuration
 /var/lib/warden/             # Models, corpus, user data, and logs
 /etc/systemd/system/warden.service
@@ -132,6 +134,15 @@ Updates should stage repository changes, deploy only `code/`, build affected
 components, and verify service health. The Git metadata must remain available
 for future updates. Large model files and offline databases are distributed
 separately from application source.
+
+The commands `warden init` and `warden start` prepare the installed runtime
+and supervise Core. `warden update --self` asks the independent bootstrap to
+pull the repository and replace the Warden executable when `warden.cpp` has a
+newer revision. `warden start` also checks for a newer Warden revision before
+starting Core. Core signals its requested action through its process exit
+status: `10` requests an update, `11` requests a restart, and `12` requests a
+safe exit. `warden start` forwards an external stop request to Core and waits
+for it to exit.
 
 ## Development
 
