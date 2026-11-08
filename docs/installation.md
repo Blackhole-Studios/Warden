@@ -92,14 +92,18 @@ The checker pulls the checkout and compares the installed source revision with
 `warden.cpp` at the checkout revision. If Warden is unchanged or the checkout
 is older, it relaunches the current executable. If `warden.cpp` is newer, it
 compiles and installs the new executable, runs `warden init`, then relaunches
-it. `warden update --self` starts this bootstrap flow and exits cleanly so the
-bootstrap can wait for the old process to close. Run `warden update --self`
-with root privileges because the bootstrap replaces `/usr/local/bin/warden`.
+it. `warden update --self` replaces its process with the bootstrap and returns
+only after the bootstrap has completed and relaunched the installed Warden.
+This keeps the command synchronous so a following command cannot race the
+replacement. Run it with root privileges because the bootstrap replaces
+`/usr/local/bin/warden`.
 The bootstrap records the `warden.cpp` Git blob it installed, so unchanged
 startup checks do not recompile Warden. `warden init` fingerprints Core and
 bootstrap sources and skips builds when those files and their installed
 binaries are unchanged. `warden update` deploys `code/` only when that tree
 changed in Git and rebuilds Core only when its source fingerprint changed.
+Core's build discovers all `.cpp` files beneath `code/core/`, so new Core
+modules are included without maintaining a separate source list.
 
 Core uses exit code `10` to request an update, `11` to request a restart, and
 `12` to request a safe exit. The current terminal Core accepts text, stores

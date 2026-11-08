@@ -1,4 +1,5 @@
 #include <cerrno>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -59,6 +60,20 @@ std::string files_hash(const std::vector<std::string>& paths) {
     std::ostringstream value;
     value << std::hex << hash;
     return value.str();
+}
+
+std::vector<std::string> core_source_files() {
+    std::vector<std::string> paths;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(kCoreDirectory, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec) || ec) continue;
+        const std::string extension = it->path().extension().string();
+        if (extension == ".cpp" || extension == ".hpp" || extension == ".h")
+            paths.push_back(it->path().string());
+    }
+    if (ec) return {};
+    std::sort(paths.begin(), paths.end());
+    return paths;
 }
 
 bool marker_matches(const char* marker_path, const std::string& value) {
@@ -168,15 +183,13 @@ bool build_core() {
         std::cerr << "Error: Core source is missing at " << kCoreSource << ".\n";
         return false;
     }
-    const std::string source_hash = files_hash({
-        kCoreSource, "/opt/warden/code/core/core.cpp", "/opt/warden/code/core/core.hpp",
-        "/opt/warden/code/core/stop_codes.hpp",
-        "/opt/warden/code/core/input/input_manager.cpp", "/opt/warden/code/core/input/input_manager.hpp",
-        "/opt/warden/code/core/context/context_manager.cpp", "/opt/warden/code/core/context/context_manager.hpp",
-        "/opt/warden/code/core/routing/routing_manager.cpp", "/opt/warden/code/core/routing/routing_manager.hpp",
-        "/opt/warden/code/core/response/response_manager.cpp", "/opt/warden/code/core/response/response_manager.hpp",
-        "/opt/warden/code/core/output/output_manager.cpp", "/opt/warden/code/core/output/output_manager.hpp"});
+    const std::vector<std::string> source_files = core_source_files();
+    const std::string source_hash = files_hash(source_files);
     if (source_hash.empty()) { std::cerr << "Error: cannot fingerprint Core sources.\n"; return false; }
+    if (std::find(source_files.begin(), source_files.end(), kCoreSource) == source_files.end()) {
+        std::cerr << "Error: Core entry point is missing from the source tree.\n";
+        return false;
+    }
     if (access(kCoreBinary, X_OK) == 0 && marker_matches(kCoreHash, source_hash)) {
         std::cout << "Core is unchanged; skipping build.\n";
         return true;
@@ -185,13 +198,11 @@ bool build_core() {
     fs::remove(staged, ec);
     if (ec) { std::cerr << "Error: cannot clear staged Core binary: " << ec.message() << '\n'; return false; }
     std::cout << "Building Core...\n";
-    if (run("g++", {"-std=c++17", "-O2", "-pthread", "-I", kCoreDirectory,
-                     kCoreSource, "/opt/warden/code/core/core.cpp",
-                     "/opt/warden/code/core/input/input_manager.cpp",
-                     "/opt/warden/code/core/context/context_manager.cpp",
-                     "/opt/warden/code/core/routing/routing_manager.cpp",
-                     "/opt/warden/code/core/response/response_manager.cpp",
-                     "/opt/warden/code/core/output/output_manager.cpp", "-o", staged}) != 0) {
+    std::vector<std::string> compile_args{"-std=c++17", "-O2", "-pthread", "-I", kCoreDirectory};
+    for (const auto& path : source_files)
+        if (fs::path(path).extension() == ".cpp") compile_args.push_back(path);
+    compile_args.insert(compile_args.end(), {"-o", staged});
+    if (run("g++", compile_args) != 0) {
         std::cerr << "Error: Core build failed. The previous Core binary, if any, was preserved.\n";
         fs::remove(staged, ec);
         return false;
@@ -239,32 +250,18 @@ bool launch_bootstrap(const std::string& mode, int argc, char** argv) {
         std::cerr << "Error: Warden bootstrap is missing. Run 'sudo warden init' first.\n";
         return false;
     }
-    const pid_t parent_pid = mode == "check" ? 0 : getpid();
-    std::vector<std::string> values{kBootstrapExecutable, "--parent", std::to_string(parent_pid),
+    // Replace this process with the bootstrap. This keeps `update --self`
+    // synchronous and guarantees callers cannot race the old executable.
+    std::vector<std::string> values{kBootstrapExecutable, "--parent", "0",
                                     "--mode", mode};
     for (int i = 1; i < argc; ++i) values.emplace_back(argv[i]);
     std::vector<char*> args;
     for (auto& value : values) args.push_back(value.data());
     args.push_back(nullptr);
-    if (mode == "check") {
-        execv(kBootstrapExecutable, args.data());
-        std::cerr << "Error: cannot execute bootstrap: " << std::strerror(errno) << '\n';
-        return false;
-    }
-
-    const pid_t child = fork();
-    if (child < 0) {
-        std::cerr << "Error: cannot start bootstrap: " << std::strerror(errno) << '\n';
-        return false;
-    }
-    if (child == 0) {
-        setsid();
-        execv(kBootstrapExecutable, args.data());
-        std::cerr << "Error: cannot execute bootstrap: " << std::strerror(errno) << '\n';
-        _exit(127);
-    }
-    std::cout << "Warden is handing control to the bootstrap and will exit now.\n";
-    return true;
+    std::cout << "Warden is handing control to the bootstrap.\n" << std::flush;
+    execv(kBootstrapExecutable, args.data());
+    std::cerr << "Error: cannot execute bootstrap: " << std::strerror(errno) << '\n';
+    return false;
 }
 
 bool deploy_code() {
