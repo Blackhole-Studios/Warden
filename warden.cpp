@@ -18,8 +18,11 @@ constexpr char kRoot[] = "/opt/warden";
 constexpr char kSource[] = "/opt/warden/source";
 constexpr char kCode[] = "/opt/warden/code";
 constexpr char kExecutable[] = "/usr/local/bin/warden";
+constexpr char kOldExecutable[] = "/usr/local/bin/warden.old";
+constexpr char kStagedExecutable[] = "/usr/local/bin/warden.new";
 constexpr char kBootstrapSource[] = "/opt/warden/source/warden-bootstrap.cpp";
 constexpr char kBootstrapExecutable[] = "/usr/local/bin/warden-bootstrap";
+constexpr char kStagedBootstrap[] = "/usr/local/bin/warden-bootstrap.new";
 constexpr char kEtc[] = "/etc/warden";
 constexpr char kData[] = "/var/lib/warden";
 constexpr char kService[] = "/etc/systemd/system/warden.service";
@@ -246,8 +249,11 @@ int install() {
     std::error_code ec;
     if (fs::exists(kSource, ec)) {
         if (!valid_checkout()) { std::cerr << "Error: " << kSource << " exists but is not a Warden checkout; left untouched.\n"; return 1; }
-        std::cout << "Warden source is already present. Use 'warden update' to update it.\n";
-        return 1;
+        std::cout << "Repairing Warden from the existing source checkout...\n";
+        if (!ensure_directories() || !deploy_code() || !install_executable() ||
+            !install_bootstrap() || !build_core()) return 1;
+        std::cout << "Warden installation repaired.\n";
+        return 0;
     }
     if (!ensure_directories()) return 1;
     std::cout << "Cloning Warden into " << kSource << "...\n";
@@ -284,9 +290,12 @@ int update(bool restart_service = true) {
 int init() {
     if (!require_root()) return 1;
     if (!ensure_directories()) return 1;
-    if (!fs::is_directory(kCode)) {
-        std::cerr << "Error: application code is missing. Run 'warden install' first.\n";
-        return 1;
+    std::error_code ec;
+    if (!fs::is_regular_file(kCoreSource, ec) || ec) {
+        if (!valid_checkout() || !deploy_code()) {
+            std::cerr << "Error: application code is missing. Run 'warden install' first.\n";
+            return 1;
+        }
     }
     if (!build_core()) return 1;
     if (!install_bootstrap()) return 1;
@@ -392,9 +401,17 @@ int uninstall(bool complete) {
         run("systemctl", {"daemon-reload"});
     }
     std::error_code ec;
-    for (const char* path : {kExecutable, kCode, kSource}) {
+    for (const char* path : {kExecutable, kOldExecutable, kStagedExecutable,
+                             kBootstrapExecutable, kStagedBootstrap, kCoreBinary,
+                             "/opt/warden/bin/core.new", kCode, kSource,
+                             "/opt/warden/.code-staging", "/opt/warden/.code-previous"}) {
         fs::remove_all(path, ec);
         if (ec) { std::cerr << "Error: cannot remove " << path << ": " << ec.message() << '\n'; return 1; }
+    }
+    // Remove only empty install directories; leave unrelated files in place.
+    for (const char* path : {"/opt/warden/bin", kRoot}) {
+        ec.clear();
+        fs::remove(path, ec);
     }
     if (complete) {
         fs::remove_all(kEtc, ec);

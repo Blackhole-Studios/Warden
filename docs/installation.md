@@ -70,7 +70,8 @@ Deployment should avoid modifying protected configuration and user data.
 ## Uninstall behavior
 
 - Normal uninstall removes the executable, application code, and service while
-  preserving configuration and user data.
+  preserving configuration and user data. It also removes the bootstrap and
+  Core binaries, then removes empty `/opt/warden/` directories.
 - Complete removal also deletes configuration, models, corpus, logs, and other
   Warden data, and requires explicit confirmation.
 
@@ -78,6 +79,8 @@ Deployment should avoid modifying protected configuration and user data.
 
 `warden.cpp` provides the documented CLI, persistent checkout, staged code
 deployment, status reporting, uninstall, Core build, and Core supervision.
+`warden install` repairs a valid existing checkout by redeploying code and
+rebuilding the installed executables.
 `warden init` creates required directories, compiles
 `code/core/main.cpp` to `/opt/warden/bin/core`, and builds the separate
 `warden-bootstrap` executable from `warden-bootstrap.cpp`.
