@@ -31,6 +31,7 @@ constexpr char kEtc[] = "/etc/warden";
 constexpr char kData[] = "/var/lib/warden";
 constexpr char kService[] = "/etc/systemd/system/warden.service";
 constexpr char kCoreSource[] = "/opt/warden/code/core/main.cpp";
+constexpr char kCoreDirectory[] = "/opt/warden/code/core";
 constexpr char kCoreBinary[] = "/opt/warden/bin/core";
 constexpr char kCoreHash[] = "/var/lib/warden/core.source-hash";
 constexpr char kBootstrapHash[] = "/var/lib/warden/bootstrap.source-hash";
@@ -167,7 +168,14 @@ bool build_core() {
         std::cerr << "Error: Core source is missing at " << kCoreSource << ".\n";
         return false;
     }
-    const std::string source_hash = files_hash({kCoreSource, "/opt/warden/code/core/stop_codes.hpp"});
+    const std::string source_hash = files_hash({
+        kCoreSource, "/opt/warden/code/core/core.cpp", "/opt/warden/code/core/core.hpp",
+        "/opt/warden/code/core/stop_codes.hpp",
+        "/opt/warden/code/core/input/input_manager.cpp", "/opt/warden/code/core/input/input_manager.hpp",
+        "/opt/warden/code/core/context/context_manager.cpp", "/opt/warden/code/core/context/context_manager.hpp",
+        "/opt/warden/code/core/routing/routing_manager.cpp", "/opt/warden/code/core/routing/routing_manager.hpp",
+        "/opt/warden/code/core/response/response_manager.cpp", "/opt/warden/code/core/response/response_manager.hpp",
+        "/opt/warden/code/core/output/output_manager.cpp", "/opt/warden/code/core/output/output_manager.hpp"});
     if (source_hash.empty()) { std::cerr << "Error: cannot fingerprint Core sources.\n"; return false; }
     if (access(kCoreBinary, X_OK) == 0 && marker_matches(kCoreHash, source_hash)) {
         std::cout << "Core is unchanged; skipping build.\n";
@@ -177,7 +185,13 @@ bool build_core() {
     fs::remove(staged, ec);
     if (ec) { std::cerr << "Error: cannot clear staged Core binary: " << ec.message() << '\n'; return false; }
     std::cout << "Building Core...\n";
-    if (run("g++", {"-std=c++17", "-O2", "-pthread", kCoreSource, "-o", staged}) != 0) {
+    if (run("g++", {"-std=c++17", "-O2", "-pthread", "-I", kCoreDirectory,
+                     kCoreSource, "/opt/warden/code/core/core.cpp",
+                     "/opt/warden/code/core/input/input_manager.cpp",
+                     "/opt/warden/code/core/context/context_manager.cpp",
+                     "/opt/warden/code/core/routing/routing_manager.cpp",
+                     "/opt/warden/code/core/response/response_manager.cpp",
+                     "/opt/warden/code/core/output/output_manager.cpp", "-o", staged}) != 0) {
         std::cerr << "Error: Core build failed. The previous Core binary, if any, was preserved.\n";
         fs::remove(staged, ec);
         return false;
@@ -320,7 +334,14 @@ int install() {
         std::cerr << "Error: could not fetch Warden source; existing installation was left untouched.\n";
         return 1;
     }
-    for (const char* relative : {"warden.cpp", "warden-bootstrap.cpp", "code/core/main.cpp", "code/core/stop_codes.hpp"}) {
+    for (const char* relative : {
+             "warden.cpp", "warden-bootstrap.cpp", "code/core/main.cpp", "code/core/core.cpp",
+             "code/core/core.hpp", "code/core/stop_codes.hpp",
+             "code/core/input/input_manager.cpp", "code/core/input/input_manager.hpp",
+             "code/core/context/context_manager.cpp", "code/core/context/context_manager.hpp",
+             "code/core/routing/routing_manager.cpp", "code/core/routing/routing_manager.hpp",
+             "code/core/response/response_manager.cpp", "code/core/response/response_manager.hpp",
+             "code/core/output/output_manager.cpp", "code/core/output/output_manager.hpp"}) {
         if (!fs::is_regular_file(staged_source / relative, ec) || ec) {
             fs::remove_all(stage, ec);
             std::cerr << "Error: fetched source is incomplete (missing " << relative

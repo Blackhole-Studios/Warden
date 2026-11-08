@@ -1,10 +1,8 @@
+#include "core.hpp"
 #include "stop_codes.hpp"
 
 #include <atomic>
-#include <chrono>
 #include <csignal>
-#include <iostream>
-#include <thread>
 
 namespace {
 std::atomic<bool> running{true};
@@ -15,17 +13,14 @@ void handle_signal(int) {
 }  // namespace
 
 int main() {
-    std::signal(SIGINT, handle_signal);
-    std::signal(SIGTERM, handle_signal);
+    struct sigaction action{};
+    action.sa_handler = handle_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    sigaction(SIGINT, &action, nullptr);
+    sigaction(SIGTERM, &action, nullptr);
 
-    std::cout << "[Core] Starting...\n";
-    std::cout << "[Core] Initialization complete.\n";
-    std::cout << "[Core] Waiting for shutdown.\n";
-
-    while (running) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-
-    std::cout << "[Core] Shutting down.\n";
+    warden::core::Core core;
+    core.run(running);
     return warden::core::SafeExit;
 }

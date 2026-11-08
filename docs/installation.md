@@ -83,8 +83,9 @@ deployment, status reporting, uninstall, Core build, and Core supervision.
 removes and recreates `/opt/warden`. An incomplete checkout is rejected before
 the current installation is removed. The command then deploys `code/` and
 compiles Warden, the bootstrap, and Core from the fresh checkout.
-`warden init` creates required directories, compiles
-`code/core/main.cpp` to `/opt/warden/bin/core`, and builds the separate
+`warden init` creates required directories, compiles the Core entry point and
+its input, context, routing, response, and output managers to
+`/opt/warden/bin/core`, and builds the separate
 `warden-bootstrap` executable from `warden-bootstrap.cpp`.
 `warden start` replaces itself with the bootstrap checker before starting Core.
 The checker pulls the checkout and compares the installed source revision with
@@ -101,9 +102,10 @@ binaries are unchanged. `warden update` deploys `code/` only when that tree
 changed in Git and rebuilds Core only when its source fingerprint changed.
 
 Core uses exit code `10` to request an update, `11` to request a restart, and
-`12` to request a safe exit. The current minimal Core waits for SIGINT or
-SIGTERM and returns `12`. Updates rebuild Core after deploying application
-code. The bootstrap removes `/usr/local/bin/warden.old` at the beginning of
-its next run. A systemd unit is still not present, so installation does not
-register a boot service. Configuration files are not generated until their
-schemas are defined.
+`12` to request a safe exit. The current terminal Core accepts text, stores
+user and assistant turns in in-memory context, uses a placeholder route and
+response, and returns `12` for `exit`, EOF, or a shutdown signal. Application
+updates rebuild Core only when its source files change. The bootstrap removes
+`/usr/local/bin/warden.old` at the beginning of its next run. A systemd unit is
+still not present, so installation does not register a boot service.
+Configuration files are not generated until their schemas are defined.

@@ -144,6 +144,10 @@ status: `10` requests an update, `11` requests a restart, and `12` requests a
 safe exit. `warden start` forwards an external stop request to Core and waits
 for it to exit.
 
+The initial Core runtime accepts terminal text, keeps an in-memory conversation
+history, passes each turn through placeholder routing and response layers,
+and prints the response. Gemma and QISKIT are not part of this first runtime.
+
 `warden install` fetches a clean checkout, verifies the required runtime
 sources, then replaces `/opt/warden` and builds the installed executables.
 Configuration in `/etc/warden` and user data in `/var/lib/warden` remain
