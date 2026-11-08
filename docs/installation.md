@@ -79,8 +79,10 @@ Deployment should avoid modifying protected configuration and user data.
 
 `warden.cpp` provides the documented CLI, persistent checkout, staged code
 deployment, status reporting, uninstall, Core build, and Core supervision.
-`warden install` repairs a valid existing checkout by redeploying code and
-rebuilding the installed executables.
+`warden install` fetches and validates a clean checkout in staging before it
+removes and recreates `/opt/warden`. An incomplete checkout is rejected before
+the current installation is removed. The command then deploys `code/` and
+compiles Warden, the bootstrap, and Core from the fresh checkout.
 `warden init` creates required directories, compiles
 `code/core/main.cpp` to `/opt/warden/bin/core`, and builds the separate
 `warden-bootstrap` executable from `warden-bootstrap.cpp`.

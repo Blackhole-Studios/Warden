@@ -90,10 +90,10 @@ bool git_output(const std::vector<std::string>& args, std::string& output) {
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-bool valid_checkout() {
+bool valid_checkout(const std::string& directory = kSource) {
     std::string tree, remote;
-    return git_output({"-C", kSource, "rev-parse", "--is-inside-work-tree"}, tree) && tree == "true" &&
-           git_output({"-C", kSource, "remote", "get-url", "origin"}, remote) &&
+    return git_output({"-C", directory, "rev-parse", "--is-inside-work-tree"}, tree) && tree == "true" &&
+           git_output({"-C", directory, "remote", "get-url", "origin"}, remote) &&
            (remote == kRepositoryUrl || remote == "https://github.com/Blackhole-Studios/Warden" ||
             remote == "git@github.com:Blackhole-Studios/Warden.git" ||
             remote == "git@github.com:Blackhole-Studios/Warden" ||
@@ -235,32 +235,59 @@ bool deploy_code() {
 
 bool install_executable() {
     std::error_code ec;
-    fs::copy_file("/proc/self/exe", kExecutable, fs::copy_options::overwrite_existing, ec);
-    if (ec) { std::cerr << "Error: cannot install " << kExecutable << ": " << ec.message() << '\n'; return false; }
-    fs::permissions(kExecutable, fs::perms::owner_all | fs::perms::group_read |
+    const std::string staged = kStagedExecutable;
+    fs::remove(staged, ec);
+    if (ec) { std::cerr << "Error: cannot clear staged Warden executable: " << ec.message() << '\n'; return false; }
+    if (run("g++", {"-std=c++17", "-O2", fs::path(kSource).append("warden.cpp").string(), "-o", staged}) != 0) {
+        std::cerr << "Error: compiling warden.cpp failed. The current executable was preserved.\n";
+        fs::remove(staged, ec);
+        return false;
+    }
+    fs::permissions(staged, fs::perms::owner_all | fs::perms::group_read |
                     fs::perms::group_exec | fs::perms::others_read | fs::perms::others_exec,
                     fs::perm_options::replace, ec);
-    if (ec) { std::cerr << "Error: cannot set executable permissions: " << ec.message() << '\n'; return false; }
+    if (ec) { std::cerr << "Error: cannot set Warden permissions: " << ec.message() << '\n'; fs::remove(staged); return false; }
+    fs::rename(staged, kExecutable, ec);
+    if (ec) { std::cerr << "Error: cannot install " << kExecutable << ": " << ec.message() << '\n'; fs::remove(staged); return false; }
     return true;
 }
 
 int install() {
     if (!require_root()) return 1;
+    const fs::path stage = fs::path("/opt") / (".warden-install-" + std::to_string(getpid()));
+    const fs::path staged_source = stage / "source";
     std::error_code ec;
-    if (fs::exists(kSource, ec)) {
-        if (!valid_checkout()) { std::cerr << "Error: " << kSource << " exists but is not a Warden checkout; left untouched.\n"; return 1; }
-        std::cout << "Repairing Warden from the existing source checkout...\n";
-        if (!ensure_directories() || !deploy_code() || !install_executable() ||
-            !install_bootstrap() || !build_core()) return 1;
-        std::cout << "Warden installation repaired.\n";
-        return 0;
+    fs::remove_all(stage, ec);
+    if (ec) { std::cerr << "Error: cannot clear install staging directory: " << ec.message() << '\n'; return 1; }
+    fs::create_directories(stage, ec);
+    if (ec) { std::cerr << "Error: cannot create install staging directory: " << ec.message() << '\n'; return 1; }
+
+    std::cout << "Fetching a clean Warden source checkout...\n";
+    if (run("git", {"clone", kRepositoryUrl, staged_source.string()}) != 0) {
+        fs::remove_all(stage, ec);
+        std::cerr << "Error: could not fetch Warden source; existing installation was left untouched.\n";
+        return 1;
     }
-    if (!ensure_directories()) return 1;
-    std::cout << "Cloning Warden into " << kSource << "...\n";
-    if (run("git", {"clone", kRepositoryUrl, kSource}) != 0) return 1;
-    if (!deploy_code() || !install_executable() || !ensure_directories() ||
-        !install_bootstrap() || !build_core()) return 1;
-    std::cout << "Warden and Core installed. No service unit is configured yet.\n";
+    for (const char* relative : {"warden.cpp", "warden-bootstrap.cpp", "code/core/main.cpp", "code/core/stop_codes.hpp"}) {
+        if (!fs::is_regular_file(staged_source / relative, ec) || ec) {
+            fs::remove_all(stage, ec);
+            std::cerr << "Error: fetched source is incomplete (missing " << relative
+                      << "); existing installation was left untouched.\n";
+            return 1;
+        }
+    }
+
+    fs::remove_all(kRoot, ec);
+    if (ec) { fs::remove_all(stage); std::cerr << "Error: cannot remove old " << kRoot << ": " << ec.message() << '\n'; return 1; }
+    fs::create_directories(kRoot, ec);
+    if (ec) { fs::remove_all(stage); std::cerr << "Error: cannot recreate " << kRoot << ": " << ec.message() << '\n'; return 1; }
+    fs::rename(staged_source, kSource, ec);
+    if (ec) { fs::remove_all(stage); std::cerr << "Error: cannot install source checkout: " << ec.message() << '\n'; return 1; }
+    fs::remove_all(stage, ec);
+
+    if (!ensure_directories() || !deploy_code() || !install_bootstrap() ||
+        !build_core() || !install_executable()) return 1;
+    std::cout << "Warden and Core installed from a clean source checkout. No service unit is configured yet.\n";
     return 0;
 }
 

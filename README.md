@@ -144,6 +144,11 @@ status: `10` requests an update, `11` requests a restart, and `12` requests a
 safe exit. `warden start` forwards an external stop request to Core and waits
 for it to exit.
 
+`warden install` fetches a clean checkout, verifies the required runtime
+sources, then replaces `/opt/warden` and builds the installed executables.
+Configuration in `/etc/warden` and user data in `/var/lib/warden` remain
+separate from that application directory.
+
 ## Development
 
 Warden is currently in early development. Its architecture and components are subject to change.
