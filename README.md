@@ -148,6 +148,8 @@ for it to exit.
 sources, then replaces `/opt/warden` and builds the installed executables.
 Configuration in `/etc/warden` and user data in `/var/lib/warden` remain
 separate from that application directory.
+Build fingerprints let `warden init` and `warden update` skip Warden, Core,
+and bootstrap builds when their respective sources have not changed.
 
 ## Development
 

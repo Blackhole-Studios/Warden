@@ -1,7 +1,11 @@
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <csignal>
 #include <cstdlib>
 #include <string>
@@ -28,6 +32,8 @@ constexpr char kData[] = "/var/lib/warden";
 constexpr char kService[] = "/etc/systemd/system/warden.service";
 constexpr char kCoreSource[] = "/opt/warden/code/core/main.cpp";
 constexpr char kCoreBinary[] = "/opt/warden/bin/core";
+constexpr char kCoreHash[] = "/var/lib/warden/core.source-hash";
+constexpr char kBootstrapHash[] = "/var/lib/warden/bootstrap.source-hash";
 // Keep these values synchronized with code/core/stop_codes.hpp.
 constexpr int kCoreUpdate = 10;
 constexpr int kCoreRestart = 11;
@@ -35,6 +41,40 @@ constexpr int kCoreSafeExit = 12;
 volatile std::sig_atomic_t g_stop_requested = 0;
 
 void request_stop(int) { g_stop_requested = 1; }
+
+std::string files_hash(const std::vector<std::string>& paths) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (const auto& path : paths) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file) return {};
+        char byte;
+        while (file.get(byte)) {
+            hash ^= static_cast<unsigned char>(byte);
+            hash *= 1099511628211ULL;
+        }
+        hash ^= 255;
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream value;
+    value << std::hex << hash;
+    return value.str();
+}
+
+bool marker_matches(const char* marker_path, const std::string& value) {
+    std::ifstream marker(marker_path);
+    std::string recorded;
+    return !value.empty() && std::getline(marker, recorded) && recorded == value;
+}
+
+bool save_marker(const char* marker_path, const std::string& value) {
+    const std::string temporary = std::string(marker_path) + ".new";
+    { std::ofstream marker(temporary, std::ios::trunc); marker << value << '\n';
+      if (!marker) { std::cerr << "Error: cannot write build marker " << marker_path << ".\n"; return false; } }
+    std::error_code ec;
+    fs::rename(temporary, marker_path, ec);
+    if (ec) { std::cerr << "Error: cannot install build marker: " << ec.message() << '\n'; return false; }
+    return true;
+}
 
 int run(const std::string& program, const std::vector<std::string>& arguments) {
     std::vector<char*> argv;
@@ -127,6 +167,12 @@ bool build_core() {
         std::cerr << "Error: Core source is missing at " << kCoreSource << ".\n";
         return false;
     }
+    const std::string source_hash = files_hash({kCoreSource, "/opt/warden/code/core/stop_codes.hpp"});
+    if (source_hash.empty()) { std::cerr << "Error: cannot fingerprint Core sources.\n"; return false; }
+    if (access(kCoreBinary, X_OK) == 0 && marker_matches(kCoreHash, source_hash)) {
+        std::cout << "Core is unchanged; skipping build.\n";
+        return true;
+    }
     const std::string staged = std::string(kCoreBinary) + ".new";
     fs::remove(staged, ec);
     if (ec) { std::cerr << "Error: cannot clear staged Core binary: " << ec.message() << '\n'; return false; }
@@ -142,7 +188,7 @@ bool build_core() {
     if (ec) { std::cerr << "Error: cannot set Core permissions: " << ec.message() << '\n'; fs::remove(staged); return false; }
     fs::rename(staged, kCoreBinary, ec);
     if (ec) { std::cerr << "Error: cannot install Core binary: " << ec.message() << '\n'; fs::remove(staged); return false; }
-    return true;
+    return save_marker(kCoreHash, source_hash);
 }
 
 bool install_bootstrap() {
@@ -150,6 +196,12 @@ bool install_bootstrap() {
     if (!fs::is_regular_file(kBootstrapSource, ec) || ec) {
         std::cerr << "Error: bootstrap source is missing at " << kBootstrapSource << ".\n";
         return false;
+    }
+    const std::string source_hash = files_hash({kBootstrapSource});
+    if (source_hash.empty()) { std::cerr << "Error: cannot fingerprint bootstrap source.\n"; return false; }
+    if (access(kBootstrapExecutable, X_OK) == 0 && marker_matches(kBootstrapHash, source_hash)) {
+        std::cout << "Bootstrap is unchanged; skipping build.\n";
+        return true;
     }
     const std::string staged = std::string(kBootstrapExecutable) + ".new";
     fs::remove(staged, ec);
@@ -165,7 +217,7 @@ bool install_bootstrap() {
     if (ec) { std::cerr << "Error: cannot set bootstrap permissions: " << ec.message() << '\n'; fs::remove(staged); return false; }
     fs::rename(staged, kBootstrapExecutable, ec);
     if (ec) { std::cerr << "Error: cannot install bootstrap: " << ec.message() << '\n'; fs::remove(staged); return false; }
-    return true;
+    return save_marker(kBootstrapHash, source_hash);
 }
 
 bool launch_bootstrap(const std::string& mode, int argc, char** argv) {
@@ -294,20 +346,41 @@ int install() {
 int update(bool restart_service = true) {
     if (!require_root()) return 1;
     if (!valid_checkout()) { std::cerr << "Error: no valid Warden checkout at " << kSource << ". Run 'warden install' first.\n"; return 1; }
+    std::string old_revision;
+    if (!git_output({"-C", kSource, "rev-parse", "HEAD"}, old_revision)) {
+        std::cerr << "Error: cannot read current source revision.\n";
+        return 1;
+    }
     std::cout << "Updating Warden source...\n";
     if (run("git", {"-C", kSource, "pull", "--ff-only"}) != 0) {
         std::cerr << "Error: update failed. Local changes may prevent a fast-forward update.\n";
         return 1;
     }
-    if (!deploy_code() || !build_core()) return 1;
-    std::cout << "Application code deployed and Core rebuilt.\n";
-    if (restart_service && fs::exists(kService)) {
+    std::string new_revision;
+    if (!git_output({"-C", kSource, "rev-parse", "HEAD"}, new_revision)) {
+        std::cerr << "Error: cannot read updated source revision.\n";
+        return 1;
+    }
+    int code_diff = 0;
+    if (old_revision != new_revision)
+        code_diff = run("git", {"-C", kSource, "diff", "--quiet", old_revision,
+                                 new_revision, "--", "code/"});
+    if (code_diff < 0 || code_diff > 1) {
+        std::cerr << "Error: cannot compare application source revisions.\n";
+        return 1;
+    }
+    const bool code_changed = code_diff == 1 || !fs::is_directory(kCode);
+    if (!install_bootstrap()) return 1;
+    if (code_changed && !deploy_code()) return 1;
+    if (!build_core()) return 1;
+    std::cout << (code_changed ? "Application code deployed.\n" : "Application code is unchanged; deployment skipped.\n");
+    if (restart_service && code_changed && fs::exists(kService)) {
         if (run("systemctl", {"restart", "warden.service"}) != 0 ||
             run("systemctl", {"is-active", "--quiet", "warden.service"}) != 0) {
             std::cerr << "Error: Warden service did not restart successfully.\n";
             return 1;
         }
-    } else if (restart_service) {
+    } else if (restart_service && code_changed) {
         std::cout << "Service restart skipped: no service unit is installed.\n";
     }
     std::cout << "Warden update completed.\n";

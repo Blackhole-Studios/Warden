@@ -129,22 +129,29 @@ int bootstrap(int argc, char** argv) {
         resume_warden(command, "error");
     }
 
-    std::string current_revision, installed_revision;
+    std::string current_revision, current_warden_blob, installed_revision, installed_warden_blob;
     if (!git_value({"-C", kSource, "rev-parse", "HEAD"}, current_revision)) {
         std::cerr << "Bootstrap: cannot read the source revision.\n";
         resume_warden(command, "error");
     }
+    if (!git_value({"-C", kSource, "rev-parse", "HEAD:warden.cpp"}, current_warden_blob)) {
+        std::cerr << "Bootstrap: cannot fingerprint warden.cpp.\n";
+        resume_warden(command, "error");
+    }
     std::ifstream revision_file(kInstalledRevision);
     std::getline(revision_file, installed_revision);
+    std::getline(revision_file, installed_warden_blob);
 
     bool newer = installed_revision.empty();
-    if (!newer && installed_revision != current_revision && is_ancestor(installed_revision, current_revision)) {
-        const int diff_status = run("git", {"-C", kSource, "diff", "--quiet", installed_revision,
-                                             current_revision, "--", "warden.cpp"});
-        newer = diff_status == 1;
-        if (diff_status > 1) {
-            std::cerr << "Bootstrap: cannot compare Warden revisions.\n";
-            resume_warden(command, "error");
+    if (!newer) {
+        const bool forward = installed_revision == current_revision || is_ancestor(installed_revision, current_revision);
+        if (forward) {
+            if (installed_warden_blob.empty() &&
+                !git_value({"-C", kSource, "rev-parse", installed_revision + ":warden.cpp"}, installed_warden_blob)) {
+                std::cerr << "Bootstrap: cannot fingerprint the installed Warden revision.\n";
+                resume_warden(command, "error");
+            }
+            newer = installed_warden_blob != current_warden_blob;
         }
     }
     if (!newer) {
@@ -177,7 +184,7 @@ int bootstrap(int argc, char** argv) {
         resume_warden(command, "error");
     }
     std::ofstream marker(kInstalledRevision, std::ios::trunc);
-    marker << current_revision << '\n';
+    marker << current_revision << '\n' << current_warden_blob << '\n';
     if (!marker) {
         std::cerr << "Bootstrap error: cannot record installed revision.\n";
         resume_warden(command, "error");

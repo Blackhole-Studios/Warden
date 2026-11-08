@@ -94,6 +94,11 @@ compiles and installs the new executable, runs `warden init`, then relaunches
 it. `warden update --self` starts this bootstrap flow and exits cleanly so the
 bootstrap can wait for the old process to close. Run `warden update --self`
 with root privileges because the bootstrap replaces `/usr/local/bin/warden`.
+The bootstrap records the `warden.cpp` Git blob it installed, so unchanged
+startup checks do not recompile Warden. `warden init` fingerprints Core and
+bootstrap sources and skips builds when those files and their installed
+binaries are unchanged. `warden update` deploys `code/` only when that tree
+changed in Git and rebuilds Core only when its source fingerprint changed.
 
 Core uses exit code `10` to request an update, `11` to request a restart, and
 `12` to request a safe exit. The current minimal Core waits for SIGINT or
